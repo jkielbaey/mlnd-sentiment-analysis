@@ -55,6 +55,19 @@ def _get_train_data_loader(batch_size, training_dir):
     return torch.utils.data.DataLoader(train_ds, batch_size=batch_size)
 
 
+def _get_test_data_loader(batch_size, test_dir):
+    print("Get test data loader.")
+
+    test_data = pd.read_csv(os.path.join(test_dir, "test.csv"), header=None, names=None)
+
+    test_y = torch.from_numpy(test_data[[0]].values).float().squeeze()
+    test_X = torch.from_numpy(test_data.drop([0], axis=1).values).long()
+
+    test_ds = torch.utils.data.TensorDataset(test_X, test_y)
+
+    return torch.utils.data.DataLoader(test_ds, batch_size=batch_size)
+
+
 def train(model, train_loader, epochs, optimizer, loss_fn, device):
     """
     This is the training method that is called by the PyTorch training script. The parameters
@@ -86,7 +99,32 @@ def train(model, train_loader, epochs, optimizer, loss_fn, device):
            
             
             total_loss += loss.data.item()
-        print("Epoch: {}, BCELoss: {}".format(epoch, total_loss / len(train_loader)))
+        print("[{}], train:bce-loss={};".format(epoch, total_loss / len(train_loader)))
+
+def test(model, test_loader, loss_fn, device):
+    """
+    This is the test/validation method that is called by the PyTorch training script. The parameters
+    passed are as follows:
+    model        - The PyTorch model that we wish to test.
+    test_loader  - The PyTorch DataLoader that should be used during testing.
+    loss_fn      - The loss function used for testing.
+    device       - Where the model and data should be loaded (gpu or cpu).
+    """
+    
+    model.eval()
+    total_loss = 0
+    with torch.no_grad():
+        for batch in test_loader:
+            batch_X, batch_y = batch
+
+            batch_X = batch_X.to(device)
+            batch_y = batch_y.to(device)
+
+            pred_y = model.forward(batch_X)
+            loss = loss_fn(pred_y, batch_y)
+
+            total_loss += loss.data.item()
+    print("validation:bce-loss={};".format(total_loss / len(test_loader)))
 
 
 if __name__ == '__main__':
@@ -115,7 +153,7 @@ if __name__ == '__main__':
     parser.add_argument('--hosts', type=list, default=json.loads(os.environ['SM_HOSTS']))
     parser.add_argument('--current-host', type=str, default=os.environ['SM_CURRENT_HOST'])
     parser.add_argument('--model-dir', type=str, default=os.environ['SM_MODEL_DIR'])
-    parser.add_argument('--data-dir', type=str, default=os.environ['SM_CHANNEL_TRAINING'])
+    parser.add_argument('--data-dir', type=str, default=os.environ['SM_CHANNEL_DATA'])
     parser.add_argument('--num-gpus', type=int, default=os.environ['SM_NUM_GPUS'])
 
     args = parser.parse_args()
@@ -127,6 +165,7 @@ if __name__ == '__main__':
 
     # Load the training data.
     train_loader = _get_train_data_loader(args.batch_size, args.data_dir)
+    test_loader = _get_test_data_loader(args.batch_size, args.data_dir)
 
     # Build the model.
     model = LSTMClassifier(args.embedding_dim, args.hidden_dim, args.vocab_size).to(device)
@@ -143,6 +182,7 @@ if __name__ == '__main__':
     loss_fn = torch.nn.BCELoss()
 
     train(model, train_loader, args.epochs, optimizer, loss_fn, device)
+    test(model, test_loader, loss_fn, device)
 
     # Save the parameters used to construct the model
     model_info_path = os.path.join(args.model_dir, 'model_info.pth')
